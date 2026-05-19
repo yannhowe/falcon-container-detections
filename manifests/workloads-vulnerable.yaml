@@ -1,0 +1,100 @@
+---
+# Vulnerable workloads — old images with known CVEs for image assessment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vuln-nginx-old
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: vuln-nginx-old
+    tier: vulnerable
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vuln-nginx-old
+  template:
+    metadata:
+      labels:
+        app: vuln-nginx-old
+        tier: vulnerable
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.21.6
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vuln-python-old
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: vuln-python-old
+    tier: vulnerable
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vuln-python-old
+  template:
+    metadata:
+      labels:
+        app: vuln-python-old
+        tier: vulnerable
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      containers:
+        - name: python
+          image: python:3.8-slim
+          command: ["python3", "-m", "http.server", "8080"]
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vuln-alpine-old
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: vuln-alpine-old
+    tier: vulnerable
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vuln-alpine-old
+  template:
+    metadata:
+      labels:
+        app: vuln-alpine-old
+        tier: vulnerable
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      containers:
+        - name: alpine
+          image: alpine:3.14
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi

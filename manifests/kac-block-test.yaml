@@ -1,0 +1,23 @@
+---
+# KAC (Kubernetes Admission Controller) Block Test
+# This pod should be REJECTED by Falcon KAC policy
+# Deploy with: kubectl apply -f manifests/kac-block-test.yaml
+# Expected: admission webhook denies the request
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kac-block-test
+  namespace: falcon-detections
+  labels:
+    app: kac-block-test
+    purpose: kac-testing
+spec:
+  containers:
+    - name: blocked-image
+      # Use an image that should be blocked by KAC policy
+      # Options: known-malicious hash, unscanned image, or policy-violating config
+      image: docker.io/crowdstrike/detection-container:latest
+      securityContext:
+        privileged: true
+        runAsUser: 0
+      command: ["sleep", "infinity"]

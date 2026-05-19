@@ -1,0 +1,105 @@
+---
+# Compliant workloads — well-configured pods for baseline telemetry
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compliant-nginx
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: compliant-nginx
+    tier: compliant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compliant-nginx
+  template:
+    metadata:
+      labels:
+        app: compliant-nginx
+        tier: compliant
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compliant-redis
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: compliant-redis
+    tier: compliant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compliant-redis
+  template:
+    metadata:
+      labels:
+        app: compliant-redis
+        tier: compliant
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

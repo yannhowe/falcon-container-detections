@@ -1,0 +1,118 @@
+---
+# Misconfigured workloads — trigger IOM (Indicator of Misconfiguration) alerts
+# Each pod violates a different security best practice
+
+# 1. Privileged container
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: misconfig-privileged
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: misconfig-privileged
+    tier: misconfigured
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: misconfig-privileged
+  template:
+    metadata:
+      labels:
+        app: misconfig-privileged
+        tier: misconfigured
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+---
+# 2. Host network
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: misconfig-hostnetwork
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: misconfig-hostnetwork
+    tier: misconfigured
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: misconfig-hostnetwork
+  template:
+    metadata:
+      labels:
+        app: misconfig-hostnetwork
+        tier: misconfigured
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      hostNetwork: true
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+---
+# 3. Running as root
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: misconfig-root
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: misconfig-root
+    tier: misconfigured
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: misconfig-root
+  template:
+    metadata:
+      labels:
+        app: misconfig-root
+        tier: misconfigured
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+---
+# 4. No resource limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: misconfig-nolimits
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: misconfig-nolimits
+    tier: misconfigured
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: misconfig-nolimits
+  template:
+    metadata:
+      labels:
+        app: misconfig-nolimits
+        tier: misconfigured
+        sensor.falcon-system.crowdstrike.com/injection: enabled
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          # Intentionally no resources block — triggers IOM

@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: falcon-detections
+  namespace: falcon-detections
+  labels:
+    app.kubernetes.io/name: falcon-detections
+spec:
+  schedule: "0 */4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: falcon-detections
+            sensor.falcon-system.crowdstrike.com/injection: enabled
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: detections
+              image: falcon-detections:latest
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "/opt/scripts/run-all.sh"]
+              env:
+                - name: DELAY
+                  value: "30"
+              securityContext:
+                privileged: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
