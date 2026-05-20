@@ -1,0 +1,401 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Falcon Container Detection Suite — ECS Fargate one-click deploy.
+  Runs 19 attack simulation scenarios with CrowdStrike Falcon Container sensor
+  injected via init container (Method 1 / patching utility pattern).
+  Creates log group, IAM role, task definition, and triggers the task on deploy.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: CrowdStrike Falcon
+        Parameters:
+          - FalconCID
+          - SensorImageUri
+      - Label:
+          default: Application
+        Parameters:
+          - AppImageUri
+          - DetectionDelay
+          - LogGroupName
+      - Label:
+          default: Network
+        Parameters:
+          - SubnetId
+          - SecurityGroupId
+          - AssignPublicIp
+      - Label:
+          default: ECS Cluster
+        Parameters:
+          - ClusterName
+          - CreateCluster
+    ParameterLabels:
+      FalconCID:
+        default: Falcon CID (with checksum)
+      SensorImageUri:
+        default: Falcon Container sensor image URI (ECR)
+      AppImageUri:
+        default: Detection app image URI (ECR)
+      LogGroupName:
+        default: CloudWatch log group name
+      SubnetId:
+        default: Subnet ID for Fargate task
+      SecurityGroupId:
+        default: Security Group ID for Fargate task
+      AssignPublicIp:
+        default: Assign public IP (required for ECR pull without NAT)
+      ClusterName:
+        default: ECS cluster name
+      CreateCluster:
+        default: Create a new ECS cluster
+
+Parameters:
+  FalconCID:
+    Type: String
+    NoEcho: true
+    Description: >
+      Your Falcon CID including the checksum suffix, e.g. 755DC1FB341346DF8142F62675F004D3-EB.
+      Found at Falcon console → Sensor Downloads.
+
+  SensorImageUri:
+    Type: String
+    Description: >
+      URI of the Falcon Container sensor image in your ECR (or other private registry).
+      Pull it first: falcon-container-sensor-pull.sh -t falcon-container -c <your-ecr-repo>
+    Default: ""
+
+  AppImageUri:
+    Type: String
+    Description: >
+      URI of the falcon-container-detections app image.
+      Defaults to the public GHCR image built from this repo — no build required.
+      Override with your own ECR URI if needed.
+    Default: "ghcr.io/yannhowe/falcon-container-detections:latest"
+
+  LogGroupName:
+    Type: String
+    Default: /ecs/falcon-container-detections
+    Description: >
+      CloudWatch log group name. Change if the default already exists in your account
+      and you don't want to reuse it.
+
+  DetectionDelay:
+    Type: Number
+    Default: 30
+    MinValue: 10
+    MaxValue: 120
+    Description: Seconds to wait between each detection scenario (30 recommended).
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet (or private with NAT) in the region where Fargate will run.
+
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: >
+      Security group for the task. Needs outbound HTTPS (443) to reach Falcon cloud
+      and ECR. No inbound rules required.
+
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: >
+      ENABLED for public subnets (ECR pull via internet gateway).
+      DISABLED for private subnets with NAT gateway.
+
+  ClusterName:
+    Type: String
+    Default: falcon-demo
+    Description: Name of the ECS cluster to run the task in.
+
+  CreateCluster:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Set to "true" to create a new ECS cluster with this stack.
+      Set to "false" to use an existing cluster named above.
+
+Conditions:
+  ShouldCreateCluster: !Equals [!Ref CreateCluster, "true"]
+
+Resources:
+
+  # ──────────────────────────────────────────
+  # ECS Cluster (optional)
+  # ──────────────────────────────────────────
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Condition: ShouldCreateCluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+
+  # ──────────────────────────────────────────
+  # CloudWatch Log Group
+  # ──────────────────────────────────────────
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      RetentionInDays: 7
+
+  # ──────────────────────────────────────────
+  # IAM: ECS Task Execution Role
+  # ──────────────────────────────────────────
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ECRPullAndLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ECRAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: ECRPull
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}:*"
+
+  # ──────────────────────────────────────────
+  # ECS Task Definition
+  # Falcon sensor injected via init container (Method 1 / patching utility pattern)
+  # ──────────────────────────────────────────
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties:
+      Family: falcon-container-detections
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+
+      Volumes:
+        - Name: crowdstrike-falcon-volume
+
+      ContainerDefinitions:
+
+        # ── Init container: copies Falcon binaries to shared volume ──
+        - Name: crowdstrike-falcon-init-container
+          Image: !Ref SensorImageUri
+          Essential: false
+          User: '0:0'
+          ReadonlyRootFilesystem: true
+          EntryPoint:
+            - /bin/bash
+            - -c
+            - >-
+              chmod u+rwx /tmp/CrowdStrike &&
+              mkdir /tmp/CrowdStrike/rootfs &&
+              cp -r /bin /etc /lib64 /usr /entrypoint-ecs.sh /tmp/CrowdStrike/rootfs &&
+              chmod -R a=rX /tmp/CrowdStrike
+          MountPoints:
+            - ContainerPath: /tmp/CrowdStrike
+              ReadOnly: false
+              SourceVolume: crowdstrike-falcon-volume
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroupName
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: falcon-init
+
+        # ── App container: wrapped entrypoint launches Falcon first ──
+        - Name: falcon-container-detections
+          Image: !Ref AppImageUri
+          Essential: true
+          DependsOn:
+            - Condition: COMPLETE
+              ContainerName: crowdstrike-falcon-init-container
+          # Falcon ECS entrypoint wraps the original command
+          EntryPoint:
+            - /tmp/CrowdStrike/rootfs/lib64/ld-linux-x86-64.so.2
+            - --library-path
+            - /tmp/CrowdStrike/rootfs/lib64
+            - /tmp/CrowdStrike/rootfs/bin/bash
+            - /tmp/CrowdStrike/rootfs/entrypoint-ecs.sh
+            - /bin/bash
+            - /opt/scripts/run-all.sh
+          Environment:
+            - Name: FALCONCTL_OPTS
+              Value: !Sub "--cid=${FalconCID}"
+            - Name: DELAY
+              Value: !Sub "${DetectionDelay}"
+          MountPoints:
+            - ContainerPath: /tmp/CrowdStrike
+              ReadOnly: true
+              SourceVolume: crowdstrike-falcon-volume
+          LinuxParameters:
+            Capabilities:
+              Add:
+                - SYS_PTRACE
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroupName
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # ──────────────────────────────────────────
+  # IAM: Lambda execution role (for task trigger)
+  # ──────────────────────────────────────────
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RunECSTask
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt TaskExecutionRole.Arn
+
+  # ──────────────────────────────────────────
+  # Lambda: Custom resource that triggers the ECS task on stack create/update
+  # ──────────────────────────────────────────
+  TaskTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Triggers the falcon-container-detections ECS Fargate task on stack deploy
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import traceback
+
+          def handler(event, context):
+              props = event.get('ResourceProperties', {})
+
+              # Only run task on Create and Update — nothing to do on Delete
+              if event['RequestType'] == 'Delete':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              try:
+                  ecs = boto3.client('ecs', region_name=props['Region'])
+                  response = ecs.run_task(
+                      cluster=props['ClusterName'],
+                      taskDefinition=props['TaskDefinition'],
+                      launchType='FARGATE',
+                      networkConfiguration={
+                          'awsvpcConfiguration': {
+                              'subnets': [props['SubnetId']],
+                              'securityGroups': [props['SecurityGroupId']],
+                              'assignPublicIp': props.get('AssignPublicIp', 'ENABLED'),
+                          }
+                      },
+                  )
+
+                  failures = response.get('failures', [])
+                  if failures:
+                      raise RuntimeError(f"ECS run-task failures: {failures}")
+
+                  task_arn = response['tasks'][0]['taskArn']
+                  task_id = task_arn.split('/')[-1]
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'TaskArn': task_arn,
+                      'TaskId': task_id,
+                  })
+
+              except Exception as e:
+                  print(traceback.format_exc())
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      'Error': str(e),
+                  })
+
+  # ──────────────────────────────────────────
+  # Custom Resource: triggers task after stack resources are ready
+  # ──────────────────────────────────────────
+  TriggerTask:
+    Type: Custom::TriggerECSTask
+    DependsOn:
+      - TaskDefinition
+      - TaskExecutionRole
+    Properties:
+      ServiceToken: !GetAtt TaskTriggerFunction.Arn
+      Region: !Ref AWS::Region
+      ClusterName: !Ref ClusterName
+      TaskDefinition: !Ref TaskDefinition
+      SubnetId: !Ref SubnetId
+      SecurityGroupId: !Ref SecurityGroupId
+      AssignPublicIp: !Ref AssignPublicIp
+      # Bump this value to re-trigger on stack update
+      RunId: "1"
+
+# ──────────────────────────────────────────
+# Outputs
+# ──────────────────────────────────────────
+Outputs:
+
+  TaskArn:
+    Description: ARN of the triggered ECS task
+    Value: !GetAtt TriggerTask.TaskArn
+
+  TaskId:
+    Description: >
+      ECS Task ID — use this as the "Pod ID" filter in Falcon Host Management
+      to find the sensor registration
+    Value: !GetAtt TriggerTask.TaskId
+
+  LogGroupUrl:
+    Description: CloudWatch Logs — search for your task's stream prefix "ecs/" or "falcon-init/"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#logsV2:log-groups"
+
+  FalconConsoleUrl:
+    Description: >
+      Falcon Host Management — filter by Pod ID = TaskId above to verify sensor registration
+    Value: https://falcon.crowdstrike.com/host-management/hosts
+
+  TaskDefinitionArn:
+    Description: ARN of the registered ECS task definition
+    Value: !Ref TaskDefinition
